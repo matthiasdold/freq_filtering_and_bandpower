@@ -31,6 +31,7 @@ t = np.arange(0, len(x) / sfreq, 1 / sfreq)
 
 app = dash.Dash(external_stylesheets=[dbc.themes.BOOTSTRAP])
 app.title = "EEG filtering"
+server = app.server
 
 # ----------------------------------------------------------------------------
 # Layout
