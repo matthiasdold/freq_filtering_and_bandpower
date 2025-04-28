@@ -2,18 +2,18 @@ import dash
 import dash_bootstrap_components as dbc
 import mne
 import numpy as np
-import plotly.express as px
 import plotly.graph_objects as go
 import plotly.io as pio
 from dash import Input, Output, dcc, html
-from mne_lsl.datasets import sample
-from scipy.signal import butter, hilbert, periodogram, sosfilt, sosfiltfilt, welch
+from scipy.signal import butter, hilbert, sosfilt, sosfiltfilt, welch
 
 mne.set_log_level("WARNING")
 
 pio.templates.default = "plotly_white"
 
 # get examplate data from mne --> the code to generate
+#
+# from mne_lsl.datasets import sample
 # raw = (
 #     mne.io.read_raw(sample.data_path() / "sample-ant-raw.fif", preload=True)
 #     .resample(256)
@@ -41,11 +41,11 @@ controls_freq = dbc.Card(
                 dbc.Label("Freq. range [Hz]"),
                 dcc.RangeSlider(
                     id="freq-range-filtering",
-                    min=0.1,
+                    min=1,
                     max=100,
                     step=1,
-                    value=[0.1, 100],
-                    marks={i: str(i) for i in range(0, 101, 20)},
+                    value=[1, 100],
+                    marks={i: str(i) for i in range(1, 101, 20)},
                     tooltip={"placement": "bottom", "always_visible": True},
                 ),
             ]
@@ -101,11 +101,11 @@ controls_bp = dbc.Card(
                 dbc.Label("Freq. range [Hz]"),
                 dcc.RangeSlider(
                     id="freq-range-bp",
-                    min=0.1,
+                    min=1,
                     max=100,
                     step=1,
                     value=[12, 15],
-                    marks={i: str(i) for i in range(0, 101, 20)},
+                    marks={i: str(i) for i in range(1, 101, 20)},
                     tooltip={"placement": "bottom", "always_visible": True},
                 ),
             ]
