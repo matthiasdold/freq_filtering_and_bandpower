@@ -128,14 +128,14 @@ controls_bp = dbc.Card(
         ),
         html.Div(
             [
-                dbc.Label("Rolling window lenght [s]"),
+                dbc.Label("Rolling window length [s]"),
                 dcc.Slider(
                     id="rolling-range-bp",
                     min=0,
-                    max=10,
+                    max=4,
                     step=0.2,
-                    value=4,
-                    marks={i: str(i) for i in range(0, 11, 1)},
+                    value=2,
+                    marks={i: str(i) for i in range(0, 4, 1)},
                     tooltip={"placement": "bottom", "always_visible": True},
                 ),
             ]
@@ -159,8 +159,8 @@ controls_bp = dbc.Card(
                 dbc.Label("Components"),
                 dbc.Checklist(
                     id="components-bp",
-                    options=["welch", "multitaper", "hilbert", "raw"],
-                    value=["welch", "multitaper", "hilbert"],
+                    options=["welch", "multitaper", "hilbert", "rectified", "raw"],
+                    value=["welch", "multitaper", "hilbert", "rectified"],
                     inline=True,
                 ),
             ]
@@ -210,6 +210,11 @@ app.layout = dbc.Container(
                                 ),
                             ],
                             delay_show=100,
+                        ),
+                        html.Hr(),
+                        dcc.Markdown(
+                            open("./assets/bandpower.md", "r").readlines(),
+                            mathjax=True,
                         ),
                     ],
                 ),
@@ -291,70 +296,35 @@ def generate_bp_figure(
     xp = x[time_mask]
     tp = t[time_mask]
 
-    # bandpower via welch and mne.time_frequency.psd_array_multitaper
-    rolling_range_bp_idx = int(rolling_range_bp * sfreq)
-    x_welch = np.zeros(xp.shape)
-    x_multitaper = np.zeros(xp.shape)
-
-    sos = butter(filter_order, freq_range, btype="bandpass", output="sos", fs=sfreq)
-    zi = np.zeros((sos.shape[0], 2))  # type: ignore
-    x_filtered = np.zeros(xp.shape)
-    x_hilbert = np.zeros(xp.shape)
-
-    # warm up filter up to the first point that the rolling window would be able to produce an output
-    xf, zi = sosfilt(sos, xp[:rolling_range_bp_idx], zi=zi)
+    # # quick check
+    # df = (
+    #     pl.DataFrame(
+    #         {
+    #             "hilbert": x_hilbert_curr,
+    #             "x_filtered": x_filtered[idx - rolling_range_bp_idx : idx] - dc_offset,
+    #             "hilbert_appended": x_hilbert[idx - rolling_range_bp_idx : idx],
+    #         }
+    #     )
+    #     .with_row_index()
+    #     .unpivot(index="index")
+    # )
     #
-    # using a loop to simulate procedural processing
-    for idx in range(rolling_range_bp_idx, len(xp)):
-        x_window = xp[idx - rolling_range_bp_idx : idx]
-
-        # calculate, windowed approach
-        # -- Welch
-        fw, Pxx_welch = welch(x_window, sfreq, nperseg=sfreq)
-        fidx = (fw >= freq_range[0]) & (fw <= freq_range[1])
-        x_welch[idx] = np.mean(Pxx_welch[fidx])
-
-        # -- Multitaper
-        psd, _ = mne.time_frequency.psd_array_multitaper(  # type: ignore
-            x_window,
-            sfreq,
-            fmin=freq_range[0],
-            fmax=freq_range[1],
-            normalization="full",
-        )
-        x_multitaper[idx] = np.mean(psd)
-        #
-        # -- hilbert
-        x_filtered[idx], zi = sosfilt(
-            sos,
-            xp[idx - 1 : idx],
-            zi=zi,
-        )
-        x_hilbert[idx] = np.abs(hilbert(x_filtered[idx - rolling_range_bp_idx : idx]))[-1]  # type: ignore
+    # px.line(df, x="index", y="value", color="variable").show()
+    #
+    bpowers = create_bandpower_estimates(
+        xp,
+        rolling_range_bp=rolling_range_bp,
+        freq_range=freq_range,
+        sfreq=sfreq,
+        filter_order=filter_order,
+    )
 
     fig = go.Figure()
+
+    rolling_range_bp_idx = int(rolling_range_bp * sfreq)
     slice_plot = slice(rolling_range_bp_idx - 100, len(xp))
     for comp in components:
         match comp:
-            case "welch":
-                fig.add_trace(
-                    go.Scatter(x=tp[slice_plot], y=x_welch[slice_plot], name="welch")
-                )
-            case "multitaper":
-                fig.add_trace(
-                    go.Scatter(
-                        x=tp[slice_plot], y=x_multitaper[slice_plot], name="multitaper"
-                    )
-                )
-            case "hilbert":
-                fig.add_trace(
-                    go.Scatter(
-                        x=tp[slice_plot],
-                        y=x_hilbert[slice_plot],
-                        mode="lines",
-                        name="hilbert",
-                    )
-                )
             case "raw":
                 # filter and crop the raw just for visualization
                 xp_filtered = (
@@ -367,7 +337,12 @@ def generate_bp_figure(
                         y=xp_filtered[slice_plot],
                         mode="lines",
                         name="raw_filtered",
+                        opacity=0.5,
                     )
+                )
+            case _:
+                fig.add_trace(
+                    go.Scatter(x=tp[slice_plot], y=bpowers[comp], name=f"{comp}")
                 )
 
     fig = fig.update_traces(
@@ -377,10 +352,101 @@ def generate_bp_figure(
     fig = fig.update_layout(
         title=f"Bandpower between [{tp[0]:.2f}-{tp[-1]:.2f}]s, {freq_range}Hz",
         xaxis_title="Time [s]",
-        yaxis_title=f"{ch_name} bandpower [μV**2/Hz]",
+        yaxis_title=f"{ch_name} bandpower [μV²/Hz]",
+        legend=dict(orientation="h", yanchor="top", y=1.1, xanchor="center", x=0.5),
     )
 
     return fig
+
+
+def create_bandpower_estimates(
+    xp: np.ndarray,
+    rolling_range_bp: float,
+    freq_range: tuple,
+    sfreq: float,
+    filter_order: int = 2,
+) -> dict:
+
+    # bandpower via welch and mne.time_frequency.psd_array_multitaper
+    rolling_range_bp_idx = int(rolling_range_bp * sfreq)
+    x_welch = np.zeros(xp.shape)
+    x_multitaper = np.zeros(xp.shape)
+
+    # buffers for the sequential calculation
+    x_filtered = np.zeros(xp.shape)
+    x_hilbert = np.zeros(xp.shape)
+    x_rect = np.zeros(xp.shape)
+
+    # warm up filter up to the first point that the rolling window would be able to produce an output
+    if filter_order is None:
+        filter_order = 3  # can happen while editing the dropdown
+    sos = butter(filter_order, freq_range, btype="bandpass", output="sos", fs=sfreq)
+    zi = np.zeros((sos.shape[0], 2))  # type: ignore
+    xf, zi = sosfilt(sos, xp[:rolling_range_bp_idx], zi=zi)
+    x_filtered[:rolling_range_bp_idx] = xf
+
+    # using a loop to simulate sequential processing
+    for idx in range(rolling_range_bp_idx, len(xp)):
+        x_window = xp[idx - rolling_range_bp_idx : idx]
+
+        # # calculate, windowed approach
+        # -- Welch
+        fw, Pxx_welch = welch(x_window, sfreq, nperseg=min(sfreq, len(x_window)))
+        fidx = (fw >= freq_range[0]) & (fw <= freq_range[1])
+        x_welch[idx] = np.mean(Pxx_welch[fidx])
+
+        # -- Multitaper
+        psd, _ = mne.time_frequency.psd_array_multitaper(  # type: ignore
+            x_window,
+            sfreq,
+            fmin=freq_range[0],
+            fmax=freq_range[1],
+            normalization="full",
+        )
+        x_multitaper[idx] = np.mean(psd)
+
+        # Filter for hilbert and mean rectified
+        x_filtered[idx], zi = sosfilt(
+            sos,
+            xp[idx - 1 : idx],
+            zi=zi,
+        )
+
+        # -- hilbert
+        x_hilbert[idx] = calc_hilbert_ema(
+            x_filtered[idx - rolling_range_bp_idx : idx]  # type: ignore
+        )
+
+        # -- rectified
+        x_rect[idx] = calc_rectified_ma(
+            x_filtered[idx - rolling_range_bp_idx : idx]  # type: ignore
+        )
+
+    return dict(
+        welch=x_welch,
+        multitaper=x_multitaper,
+        hilbert=x_hilbert,
+        rectified=x_rect,
+    )
+
+
+def calc_hilbert_ema(xbuffer: np.ndarray) -> float:
+    """Estimate the envelope of the signal using the hilbert transform and the exponential moving average."""
+    x_hilbert = np.abs(hilbert(xbuffer))  # type: ignore
+    alpha = 2
+    exp_weights = np.exp(np.linspace(-alpha, 0.0, len(xbuffer)))
+    exp_weights /= exp_weights.sum()
+
+    # px.line(pl.DataFrame({"y": exp_weights}), y="y", title=f"{alpha=}").show()
+
+    x_hilbert_ema = x_hilbert @ exp_weights
+
+    return x_hilbert_ema
+
+
+def calc_rectified_ma(xbuffer: np.ndarray) -> float:
+    """Estimate the envelope of the signal using the hilbert transform and the exponential moving average."""
+    return np.abs(xbuffer).mean()
 
 
 if __name__ == "__main__":
