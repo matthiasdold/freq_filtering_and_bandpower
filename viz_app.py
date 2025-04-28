@@ -30,6 +30,7 @@ sfreq = raw.info["sfreq"]
 t = np.arange(0, len(x) / sfreq, 1 / sfreq)
 
 app = dash.Dash(external_stylesheets=[dbc.themes.BOOTSTRAP])
+app.title = "EEG filtering"
 
 # ----------------------------------------------------------------------------
 # Layout
@@ -383,5 +384,4 @@ def generate_bp_figure(
 
 
 if __name__ == "__main__":
-    app.title = "EEG filtering"
     app.run(debug=True, port=8888)
