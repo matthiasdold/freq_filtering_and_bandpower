@@ -302,10 +302,9 @@ def generate_bp_figure(
     x_hilbert = np.zeros(xp.shape)
 
     # warm up filter up to the first point that the rolling window would be able to produce an output
-    xf, zi = sosfilt(sos, xp[:rolling_range_bp_idx], zi=zi)
+    _, zi = sosfilt(sos, xp[:rolling_range_bp_idx], zi=zi)
     #
     # using a loop to simulate procedural processing
-    print(f"Processing for {(len(xp) - rolling_range_bp_idx)=} steps")
     for idx in range(rolling_range_bp_idx, len(xp)):
         x_window = xp[idx - rolling_range_bp_idx : idx]
 
